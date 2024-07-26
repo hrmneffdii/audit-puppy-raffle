@@ -171,6 +171,44 @@ There are a few attack vectors here.
 
 Consider using an oracle for your randomness like [Chainlink VRF](https://docs.chain.link/vrf/v2/introduction).
 
+### [H-3] Math overflow in `PuppyRaffle::selectWinner` can make the contract losing the balance of total fees
+
+**Description** 
+
+In solidity prior of 0.8.0, aritmathic operation not checked for underflow or overflow. If underflow of overflow happen, result operation may not revert and automatically reset to zero or total result modulo max of type data. In PuppyRaffle contract, i found the operation can make the operation is overflow, there are
+
+```javascript
+    uint64 totalfees = 0;
+    ...
+    uint256 fee = (totalAmountCollected * 20) / 100;
+@>  totalFees = totalFees + uint64(fee);
+```
+**Impact** 
+
+Because of math overflow happen, so we will automatically losing total of balance fee and the total balance fees will reset into 0 or be modulo with type(uint64).max
+
+**Proof of Concepts**
+
+Let we have `totalFees = 18446744073709551615` and then we have added fees 
+
+<details>
+
+<summary> Code </summary>
+
+```javascript
+totalFees = totalFees               +   uint64(fee)
+        // 18446744073709551615     +  19 
+
+totalFees
+// output: 18 
+```
+</details>
+
+**Recommended mitigation**
+
+TO prevent this situation, it must be changed type data of `totalFees` from `uint64` to `uint256` to avoid overflow operation. And also use solidity version 0.8.0 or higher because on those version, every operation underflow and overflow will be reverted.
+
+
 ### [M-1] Looping through the players array to check for duplicate in `PuppleRuffle::enterRaffle` could potentially lead to Denial of Service (DoS) attack, increasing gas cost in the future
 
 **Description**

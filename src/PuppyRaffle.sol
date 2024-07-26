@@ -140,9 +140,18 @@ contract PuppyRaffle is ERC721, Ownable {
         uint256 winnerIndex =
             uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.difficulty))) % players.length;
         address winner = players[winnerIndex];
+
+        // q why not just do address(this).balance?
         uint256 totalAmountCollected = players.length * entranceFee;
+        
+        // q is the 80% correct here?
+        // i feel there is an aritmathic error to be here...
         uint256 prizePool = (totalAmountCollected * 80) / 100;
         uint256 fee = (totalAmountCollected * 20) / 100;
+        // e this is the total fees he owner should be collected
+        // @audit everflow 
+        // fixes : newer solidity version, bigger uints
+        // @audit safe cast uint256 to uint64
         totalFees = totalFees + uint64(fee);
 
         uint256 tokenId = totalSupply();

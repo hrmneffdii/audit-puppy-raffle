@@ -136,7 +136,7 @@ contract PuppyRaffle is ERC721, Ownable {
         require(players.length >= 4, "PuppyRaffle: Need at least 4 players");
 
         // @audit randomness
-        // is th
+        // fixes : chainlink VRF
         uint256 winnerIndex =
             uint256(keccak256(abi.encodePacked(msg.sender, block.timestamp, block.difficulty))) % players.length;
         address winner = players[winnerIndex];

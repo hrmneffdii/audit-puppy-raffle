@@ -183,26 +183,94 @@ In solidity prior of 0.8.0, aritmathic operation not checked for underflow or ov
     uint256 fee = (totalAmountCollected * 20) / 100;
 @>  totalFees = totalFees + uint64(fee);
 ```
-**Impact** 
-
-Because of math overflow happen, so we will automatically losing total of balance fee and the total balance fees will reset into 0 or be modulo with type(uint64).max
-
-**Proof of Concepts**
-
-Let we have `totalFees = 18446744073709551615` and then we have added fees 
+Let we have `totalFees = 10e18 ` and then we have added fees 
 
 <details>
 
 <summary> Code </summary>
 
 ```javascript
-totalFees = totalFees               +   uint64(fee)
-        // 18446744073709551615     +  19 
-
+totalFees = totalFees  +   uint64(fee)
+           // 10e18    +   10e18               
 totalFees
-// output: 18 
+// output   :   1_553_255_926_290_448_384 
+// actually :  20_000_000_000_000_000_000 
 ```
 </details>
+
+Because of this, we also not be able to withdraw fees due to value of `totalFees` is less than `address(this).balance` (supposed to same). Let's see in `PuppyRaffle::withdrawFees` :
+
+<details>
+
+<summary> Code </summary>
+
+```javascript
+   function withdrawFees() external {
+@>     require(address(this).balance == uint256(totalFees), "PuppyRaffle: There are currently players active!");
+       uint256 feesToWithdraw = totalFees;
+       totalFees = 0;
+       (bool success,) = feeAddress.call{value: feesToWithdraw}("");
+       require(success, "PuppyRaffle: Failed to withdraw fees");
+   }
+```
+</details>
+
+**Impact** 
+
+Because of math overflow happen, so we will automatically losing total of balance fee and the total balance fees will reset into 0 or be modulo with type(uint64).max
+
+**Proof of Concepts**
+
+Let's dive into the scenario :
+1. We have 50 players entered and let's say the game is over. It can impact to change the `totalFees` is `10e18` (20% of 50 ether).
+2. After that, we just repeat first scenario, actual `totalFees` is supposed to `20e18`.
+3. eventually, `totalFees` is not `20e18` but `1.5e18`
+
+<details>
+
+<summary> Code </summary>
+
+```javascript
+function test_arithmeticOverflow() public {
+     // first scenario
+     uint length = 50;
+     address[] memory players1 = new address[](length);
+     for (uint i = 0; i < length; i++) {
+         players1[i] = address(i);
+     }
+     puppyRaffle.enterRaffle{value: entranceFee * length}(players1);
+
+     vm.warp(block.timestamp + duration + 1);
+     puppyRaffle.selectWinner();
+
+     uint256 expectedTotalFees1 = entranceFee * length * 20 / 100;
+     uint64 actualTotalFees1 = puppyRaffle.totalFees();
+
+     assertEq(expectedTotalFees1, actualTotalFees1);
+
+     // second scenario
+     address[] memory players2 = new address[](length);
+     for (uint i = 0; i < length; i++) {
+         players2[i] = address(i);
+     }
+     puppyRaffle.enterRaffle{value: entranceFee * length}(players2);
+
+     vm.warp(block.timestamp + duration + 1);
+     puppyRaffle.selectWinner();   
+
+     uint256 expectedTotalFees2 = expectedTotalFees1 + (entranceFee * length * 20 / 100);
+     uint64 actualTotalFees2 = puppyRaffle.totalFees();
+
+     assertNotEq(expectedTotalFees2, actualTotalFees2);
+     //      20000000000000000000, 1553255926290448384
+
+     vm.expectRevert("PuppyRaffle: There are currently players active!");
+     puppyRaffle.withdrawFees();
+ }
+```
+
+</details>
+
 
 **Recommended mitigation**
 

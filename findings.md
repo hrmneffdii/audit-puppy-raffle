@@ -274,7 +274,7 @@ function test_arithmeticOverflow() public {
 
 **Recommended mitigation**
 
-TO prevent this situation, it must be changed type data of `totalFees` from `uint64` to `uint256` to avoid overflow operation. And also use solidity version 0.8.0 or higher because on those version, every operation underflow and overflow will be reverted.
+To prevent this situation, it must be changed type data of `totalFees` from `uint64` to `uint256` to avoid overflow operation. And also use solidity version 0.8.0 or higher because on those version, every operation underflow and overflow will be reverted.
 
 
 ### [M-1] Looping through the players array to check for duplicate in `PuppleRuffle::enterRaffle` could potentially lead to Denial of Service (DoS) attack, increasing gas cost in the future
@@ -375,4 +375,46 @@ There are a few recommendations.
 +       }
         emit RaffleEnter(newPlayers); 
     }
+```
+
+
+### [M-2] Balance check on `PuppyRaffle::withdrawFees` enables griefers to selfdestruct a contract to send ETH to the raffle, blocking withdrawl
+
+**Description**
+
+The `PuppyRaffle::withdrawFees` function checks the `totalFees` equals to `address(this).balance` may have vulnerability. Since this contract doesn't have receive or fallback function, you'd think the `address(this).balance` untouched from those function. Other hand, `selfdestruct` can reach this position.   
+
+```javascript
+    function withdrawFees() external {
+        // @audit mishandling ETH
+@>      require(address(this).balance == uint256(totalFees), "PuppyRaffle: There are currently players active!");
+        uint256 feesToWithdraw = totalFees;
+        totalFees = 0;
+        (bool success,) = feeAddress.call{value: feesToWithdraw}("");
+        require(success, "PuppyRaffle: Failed to withdraw fees");
+}
+```
+
+**Impact**
+
+This would prevent the `feeAddress` to withdraw fees. A malicious user could see a `withdrawFee` transaction in the mempool, front-run it, and block the withdrawl by sending fees.
+
+**Proof of Concepts**
+
+1. `PuppyRaffle` has 800 wei in it's balance as well as totalFees.
+2. Malicious user sends 1 wei via a selfdestruct.
+3. `feeAddress` is no longer able to withdraw funds.
+
+**Recommended mitigation**
+
+Remove the balance check on the `PuppyRaffle::withdrawFees`
+
+```diff
+function withdrawFees() external {
+-      require(address(this).balance == uint256(totalFees), "PuppyRaffle: There are currently players active!");
+        uint256 feesToWithdraw = totalFees;
+        totalFees = 0;
+        (bool success,) = feeAddress.call{value: feesToWithdraw}("");
+        require(success, "PuppyRaffle: Failed to withdraw fees");
+}
 ```

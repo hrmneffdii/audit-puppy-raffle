@@ -1,3 +1,5 @@
+## High
+
 ### [H-1] Reentrancy Attack found in `PuppleRaffle::refund`, allowing attacker to steal the contract balance
 
 **Description** 
@@ -178,7 +180,7 @@ Consider using an oracle for your randomness like [Chainlink VRF](https://docs.c
 In solidity prior of 0.8.0, aritmathic operation not checked for underflow or overflow. If underflow of overflow happen, result operation may not revert and automatically reset to zero or total result modulo max of type data. In PuppyRaffle contract, i found the operation can make the operation is overflow, there are
 
 ```javascript
-    uint64 totalfees = 0;
+    `uint64` totalfees = 0;
     ...
     uint256 fee = (totalAmountCollected * 20) / 100;
 @>  totalFees = totalFees + uint64(fee);
@@ -276,6 +278,7 @@ function test_arithmeticOverflow() public {
 
 To prevent this situation, it must be changed type data of `totalFees` from `uint64` to `uint256` to avoid overflow operation. And also use solidity version 0.8.0 or higher because on those version, every operation underflow and overflow will be reverted.
 
+## Medium
 
 ### [M-1] Looping through the players array to check for duplicate in `PuppleRuffle::enterRaffle` could potentially lead to Denial of Service (DoS) attack, increasing gas cost in the future
 
@@ -418,3 +421,203 @@ function withdrawFees() external {
         require(success, "PuppyRaffle: Failed to withdraw fees");
 }
 ```
+
+### [M-3] Unsafe cast of `PuppyRaffle::fee` loses fees
+
+
+**Description**
+
+In `PuppyRaffle::selectWinner` their is a type cast of a `uint256` to a `uint64`.
+This is an unsafe cast, and if the `uint256` is larger than `type(uint64).max`, the value will be
+truncated.
+
+```javascript
+    function selectWinner() external {
+        ...
+@>      totalFees = totalFees + uint64(fee);
+        ...
+    }
+```
+
+The max value of a `uint64` is 18446744073709551615. In terms of ETH, this is only ~18 ETH. Meaning, if more than 18ETH of fees are collected, the `fee` casting will truncate the value
+
+**Impact**
+
+This means the `feeAddress` will not collect the correct amount of fees, leaving fees permanently stuck in the contract.
+
+**Proof of Concepts**
+
+1. Araffle proceeds with a little more than 18 ETH worth of fees collected
+2. The line that casts the fee as a uint64 hits
+3. totalFees is incorrectly updated with a lower amount
+   
+You can replicate this in foundry’s chisel by running the following:
+
+```javascript
+uint256 max = type(uint64).max
+uint256 fee = max + 1
+uint64(fee)
+// output : 0
+```
+
+**Recommended mitigation**
+
+Set `PuppyRaffle::totalFees` to a `uint256` instead of a `uint64`, and remove the casting. Their is a comment which says:
+
+```javascript
+// We do some storage packing to save gas
+```
+
+But the potential gas saved isn’t worth it if we have to recast and this bug exists.
+
+
+```diff
+-    uint64 public totalFees = 0;
++    uint256 public totalFees = 0;
+
+function selectWinner() external {
+        ...
+        uint256 fee = (totalAmountCollected * 20) / 100;
+-       totalFees = totalFees + uint64(fee);
++       totalFees = totalFees + fee;
+        ...
+    }
+```
+
+
+### [M-4] Smart Contract wallet raffle winners without a `receive` or a `fallback` will block the start of a new contest
+
+**Description:** The `PuppyRaffle::selectWinner` function is responsible for resetting the lottery. However, if the winner is a smart contract wallet that rejects payment, the lottery would not be able to restart. 
+
+Non-smart contract wallet users could reenter, but it might cost them a lot of gas due to the duplicate check.
+
+**Impact:** The `PuppyRaffle::selectWinner` function could revert many times, and make it very difficult to reset the lottery, preventing a new one from starting. 
+
+Also, true winners would not be able to get paid out, and someone else would win their money!
+
+**Proof of Concept:** 
+1. 10 smart contract wallets enter the lottery without a fallback or receive function.
+2. The lottery ends
+3. The `selectWinner` function wouldn't work, even though the lottery is over!
+
+**Recommended Mitigation:** There are a few options to mitigate this issue.
+
+1. Do not allow smart contract wallet entrants (not recommended)
+2. Create a mapping of addresses -> payout so winners can pull their funds out themselves, putting the owness on the winner to claim their prize. (Recommended)
+
+## Informational / Non-Critical 
+
+### [I-1] Floating pragmas 
+
+**Description:** Contracts should use strict versions of solidity. Locking the version ensures that contracts are not deployed with a different version of solidity than they were tested with. An incorrect version could lead to uninteded results. 
+
+https://swcregistry.io/docs/SWC-103/
+
+**Recommended Mitigation:** Lock up pragma versions.
+
+```diff
+- pragma solidity ^0.7.6;
++ pragma solidity 0.7.6;
+```
+
+### [I-2] Magic Numbers 
+
+**Description:** All number literals should be replaced with constants. This makes the code more readable and easier to maintain. Numbers without context are called "magic numbers".
+
+**Recommended Mitigation:** Replace all magic numbers with constants. 
+
+```diff
++       uint256 public constant PRIZE_POOL_PERCENTAGE = 80;
++       uint256 public constant FEE_PERCENTAGE = 20;
++       uint256 public constant TOTAL_PERCENTAGE = 100;
+.
+.
+.
+-        uint256 prizePool = (totalAmountCollected * 80) / 100;
+-        uint256 fee = (totalAmountCollected * 20) / 100;
+         uint256 prizePool = (totalAmountCollected * PRIZE_POOL_PERCENTAGE) / TOTAL_PERCENTAGE;
+         uint256 fee = (totalAmountCollected * FEE_PERCENTAGE) / TOTAL_PERCENTAGE;
+```
+
+### [I-3] Test Coverage 
+
+**Description:** The test coverage of the tests are below 90%. This often means that there are parts of the code that are not tested.
+
+```
+| File                               | % Lines        | % Statements   | % Branches     | % Funcs       |
+| ---------------------------------- | -------------- | -------------- | -------------- | ------------- |
+| script/DeployPuppyRaffle.sol       | 0.00% (0/3)    | 0.00% (0/4)    | 100.00% (0/0)  | 0.00% (0/1)   |
+| src/PuppyRaffle.sol                | 82.46% (47/57) | 83.75% (67/80) | 66.67% (20/30) | 77.78% (7/9)  |
+| test/auditTests/ProofOfCodes.t.sol | 100.00% (7/7)  | 100.00% (8/8)  | 50.00% (1/2)   | 100.00% (2/2) |
+| Total                              | 80.60% (54/67) | 81.52% (75/92) | 65.62% (21/32) | 75.00% (9/12) |
+```
+
+**Recommended Mitigation:** Increase test coverage to 90% or higher, especially for the `Branches` column. 
+
+### [I-4] Zero address validation
+
+**Description:** The `PuppyRaffle` contract does not validate that the `feeAddress` is not the zero address. This means that the `feeAddress` could be set to the zero address, and fees would be lost.
+
+```
+PuppyRaffle.constructor(uint256,address,uint256)._feeAddress (src/PuppyRaffle.sol#57) lacks a zero-check on :
+                - feeAddress = _feeAddress (src/PuppyRaffle.sol#59)
+PuppyRaffle.changeFeeAddress(address).newFeeAddress (src/PuppyRaffle.sol#165) lacks a zero-check on :
+                - feeAddress = newFeeAddress (src/PuppyRaffle.sol#166)
+```
+
+**Recommended Mitigation:** Add a zero address check whenever the `feeAddress` is updated. 
+
+### [I-5] _isActivePlayer is never used and should be removed
+
+**Description:** The function `PuppyRaffle::_isActivePlayer` is never used and should be removed. 
+
+```diff
+-    function _isActivePlayer() internal view returns (bool) {
+-        for (uint256 i = 0; i < players.length; i++) {
+-            if (players[i] == msg.sender) {
+-                return true;
+-            }
+-        }
+-        return false;
+-    }
+```
+
+### [I-6] Unchanged variables should be constant or immutable 
+
+Constant Instances:
+```
+PuppyRaffle.commonImageUri (src/PuppyRaffle.sol#35) should be constant 
+PuppyRaffle.legendaryImageUri (src/PuppyRaffle.sol#45) should be constant 
+PuppyRaffle.rareImageUri (src/PuppyRaffle.sol#40) should be constant 
+```
+
+Immutable Instances:
+
+```
+PuppyRaffle.raffleDuration (src/PuppyRaffle.sol#21) should be immutable
+```
+
+### [I-7] Potentially erroneous active player index
+
+**Description:** The `getActivePlayerIndex` function is intended to return zero when the given address is not active. However, it could also return zero for an active address stored in the first slot of the `players` array. This may cause confusions for users querying the function to obtain the index of an active player.
+
+**Recommended Mitigation:** Return 2**256-1 (or any other sufficiently high number) to signal that the given player is inactive, so as to avoid collision with indices of active players.
+
+### [I-8] Zero address may be erroneously considered an active player
+
+**Description:** The `refund` function removes active players from the `players` array by setting the corresponding slots to zero. This is confirmed by its documentation, stating that "This function will allow there to be blank spots in the array". However, this is not taken into account by the `getActivePlayerIndex` function. If someone calls `getActivePlayerIndex` passing the zero address after there's been a refund, the function will consider the zero address an active player, and return its index in the `players` array.
+
+**Recommended Mitigation:** Skip zero addresses when iterating the `players` array in the `getActivePlayerIndex`. Do note that this change would mean that the zero address can _never_ be an active player. Therefore, it would be best if you also prevented the zero address from being registered as a valid player in the `enterRaffle` function.
+
+## Gas (Optional)
+
+// TODO
+
+- `getActivePlayerIndex` returning 0. Is it the player at index 0? Or is it invalid. 
+
+- MEV with the refund function. 
+- MEV with withdrawfees
+
+- randomness for rarity issue
+
+- reentrancy puppy raffle before safemint (it looks ok actually, potentially informational)
